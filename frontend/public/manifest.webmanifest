@@ -1,15 +1,16 @@
 {
-  "name": "Todo App",
-  "short_name": "Todo",
-  "description": "Simple todo app",
+  "name": "TaskFlow",
+  "short_name": "TaskFlow",
+  "description": "Plan your day and get things done.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f1f5f9",
-  "theme_color": "#4f46e5",
+  "background_color": "#f5f6fb",
+  "theme_color": "#6366f1",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
