@@ -11,8 +11,9 @@ if (pushEnabled) {
     VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY
   );
+  console.log("Push notifications: enabled");
 } else {
-  console.warn("Push notifications disabled: set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env");
+  console.warn("Push notifications disabled: set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY");
 }
 
 const router = Router();
@@ -25,7 +26,7 @@ router.get("/public-key", (_req, res) => {
   res.json({ publicKey: VAPID_PUBLIC_KEY });
 });
 
-// POST /api/push/subscribe { subscription } -> save this device
+// POST /api/push/subscribe { subscription } -> link this device to the logged-in user
 router.post("/subscribe", async (req, res, next) => {
   const sub = req.body?.subscription;
   if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
@@ -33,10 +34,11 @@ router.post("/subscribe", async (req, res, next) => {
   }
   try {
     await pool.query(
-      `INSERT INTO push_subscriptions (endpoint, p256dh, auth)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
-      [sub.endpoint, sub.keys.p256dh, sub.keys.auth]
+      `INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (endpoint) DO UPDATE
+         SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_id = EXCLUDED.user_id`,
+      [sub.endpoint, sub.keys.p256dh, sub.keys.auth, req.user.id]
     );
     res.status(201).json({ ok: true });
   } catch (err) {
@@ -49,7 +51,10 @@ router.post("/unsubscribe", async (req, res, next) => {
   const endpoint = req.body?.endpoint;
   if (!endpoint) return res.status(400).json({ error: "Missing endpoint" });
   try {
-    await pool.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [endpoint]);
+    await pool.query("DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2", [
+      endpoint,
+      req.user.id,
+    ]);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -57,33 +62,37 @@ router.post("/unsubscribe", async (req, res, next) => {
 });
 
 /**
- * Send a notification to every subscribed device, except the one that
- * triggered it. Dead subscriptions (uninstalled app, revoked permission)
- * are removed automatically.
+ * Send a notification to every device of the given users.
+ * urgency "high" = delivered immediately, even when the phone is locked / in battery saver.
+ * Dead subscriptions (app removed, permission revoked) are cleaned up automatically.
  */
-export async function notifyAll(payload, { exceptEndpoint } = {}) {
+export async function notifyUsers(userIds, payload) {
   if (!pushEnabled) return;
-  const { rows } = await pool.query("SELECT endpoint, p256dh, auth FROM push_subscriptions");
-  const body = JSON.stringify(payload);
+  const ids = [...new Set(userIds.filter(Boolean))];
+  if (!ids.length) return;
+
+  const { rows } = await pool.query(
+    "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ANY($1::int[])",
+    [ids]
+  );
+  const body = JSON.stringify({ url: "/", ...payload });
 
   await Promise.all(
-    rows
-      .filter((r) => r.endpoint !== exceptEndpoint)
-      .map(async (r) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } },
-            body,
-            { TTL: 60 * 60 * 24 }
-          );
-        } catch (err) {
-          if (err.statusCode === 404 || err.statusCode === 410) {
-            await pool.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [r.endpoint]);
-          } else {
-            console.error("Push failed:", err.statusCode, err.body || err.message);
-          }
+    rows.map(async (r) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } },
+          body,
+          { TTL: 60 * 60 * 24, urgency: "high" }
+        );
+      } catch (err) {
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          await pool.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [r.endpoint]);
+        } else {
+          console.error("Push failed:", err.statusCode, err.body || err.message);
         }
-      })
+      }
+    })
   );
 }
 

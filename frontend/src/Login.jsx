@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, setToken } from "./api.js";
+import { api, setSession } from "./api.js";
 import { Logo, UserIcon, LockIcon, EyeIcon, EyeOffIcon, AlertIcon } from "./icons.jsx";
 
 export default function Login({ onLogin }) {
@@ -20,9 +20,9 @@ export default function Login({ onLogin }) {
     setError("");
     setLoading(true);
     try {
-      const { token } = await api.login(username.trim(), password);
-      setToken(token);
-      onLogin();
+      const { token, user } = await api.login(username.trim(), password);
+      setSession(token, user);
+      onLogin(user);
     } catch (err) {
       setError(err.message);
       setErrorKey((k) => k + 1);

@@ -6,9 +6,10 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { initDb } from "./db.js";
-import authRouter, { requireAuth } from "./auth.js";
+import authRouter, { requireAuth, requireAdmin } from "./auth.js";
 import todosRouter from "./todos.js";
-import pushRouter from "./push.js";
+import usersRouter from "./users.js";
+import pushRouter, { pushEnabled } from "./push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,9 +19,11 @@ app.use(cors());
 app.use(express.json());
 
 // API routes
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// Open /api/health in a browser to check the server: push:true means notification keys are loaded
+app.get("/api/health", (_req, res) => res.json({ ok: true, push: pushEnabled }));
 app.use("/api/auth", authRouter);
 app.use("/api/todos", requireAuth, todosRouter);
+app.use("/api/users", requireAuth, requireAdmin, usersRouter);
 app.use("/api/push", requireAuth, pushRouter);
 app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
 

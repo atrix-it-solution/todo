@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import TodoItem from "./TodoItem.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import TeamDialog from "./TeamDialog.jsx";
+import Avatar, { displayName } from "./Avatar.jsx";
 import { getPushState, enablePush, disablePush, syncPush } from "./push.js";
 import {
   BellIcon,
@@ -14,6 +16,8 @@ import {
   TrashIcon,
   ListCheckIcon,
   SparkleIcon,
+  UsersIcon,
+  ShieldIcon,
 } from "./icons.jsx";
 
 const FILTERS = [
@@ -31,18 +35,23 @@ function greeting() {
   return "Good evening";
 }
 
-export default function Todos({ onLogout }) {
+export default function Todos({ user: me, onLogout }) {
+  const isAdmin = me.role === "admin";
+
   const [todos, setTodos] = useState([]);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
+  const [assignTo, setAssignTo] = useState(String(me.id));
   const [filter, setFilter] = useState("all");
+  const [person, setPerson] = useState("everyone");
   const [query, setQuery] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [editingId, setEditingId] = useState(null);
-  const [editText, setEditText] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [push, setPush] = useState("loading"); // on | off | denied | ios-install | unsupported
   const [pushBusy, setPushBusy] = useState(false);
@@ -66,6 +75,8 @@ export default function Todos({ onLogout }) {
     toast(err?.message || "Something went wrong", "error");
   };
 
+  const canManage = (t) => isAdmin || t.created_by === me.id;
+
   const replaceTodo = (updated) => setTodos((p) => p.map((t) => (t.id === updated.id ? updated : t)));
 
   const removeLocal = (ids) => {
@@ -74,26 +85,23 @@ export default function Todos({ onLogout }) {
     setSelected((p) => new Set([...p].filter((id) => !gone.has(id))));
   };
 
+  const loadTodos = () =>
+    api.getTodos().then((data) => setTodos((prev) => [...prev.filter((t) => t.pending), ...data]));
+
   // ---------- GET ----------
   useEffect(() => {
-    api
-      .getTodos()
-      .then(setTodos)
+    loadTodos()
       .catch(fail)
       .finally(() => setLoading(false));
+    if (isAdmin) api.getUsers().then(setUsers).catch(fail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Refresh when a notification arrives or the app comes back to the screen
   useEffect(() => {
-    const refresh = () =>
-      api
-        .getTodos()
-        .then((data) => setTodos((prev) => [...prev.filter((t) => t.pending), ...data]))
-        .catch((err) => err?.status === 401 && onLogout());
+    const refresh = () => loadTodos().catch((err) => err?.status === 401 && onLogout());
     const onMessage = (e) => e.data?.type === "todos-changed" && refresh();
     const onVisible = () => document.visibilityState === "visible" && refresh();
-
     navigator.serviceWorker?.addEventListener("message", onMessage);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -108,7 +116,7 @@ export default function Todos({ onLogout }) {
     getPushState()
       .then((state) => {
         setPush(state);
-        if (state === "on") syncPush();
+        if (state === "on") syncPush(); // re-links this device to the logged-in user
       })
       .catch(() => setPush("unsupported"));
   }, []);
@@ -151,7 +159,7 @@ export default function Todos({ onLogout }) {
   };
 
   const logout = async () => {
-    // This device stops getting notifications after a manual log out
+    // This device stops getting this user's notifications after logging out
     if (push === "on") await disablePush().catch(() => {});
     onLogout();
   };
@@ -161,22 +169,42 @@ export default function Todos({ onLogout }) {
     e.preventDefault();
     const text = title.trim();
     if (!text) return;
+
+    const assigneeId = isAdmin ? (assignTo === "" ? null : Number(assignTo)) : me.id;
+    const assignee = isAdmin ? users.find((u) => u.id === assigneeId) : me;
     const tempId = `tmp-${Date.now()}-${Math.random()}`;
     const now = new Date().toISOString();
-    setTodos((p) => [{ id: tempId, title: text, completed: false, created_at: now, updated_at: now, pending: true }, ...p]);
+    setTodos((p) => [
+      {
+        id: tempId,
+        title: text,
+        completed: false,
+        created_at: now,
+        updated_at: now,
+        assigned_to: assigneeId,
+        assignee_name: assignee?.username ?? null,
+        created_by: me.id,
+        creator_name: me.username,
+        pending: true,
+      },
+      ...p,
+    ]);
     setTitle("");
     if (filter === "done") setFilter("all");
 
     api
-      .createTodo(text)
-      .then((created) =>
+      .createTodo(text, isAdmin ? assigneeId : undefined)
+      .then((created) => {
         setTodos((p) =>
           // a background refresh may already have brought this task in
           p.some((t) => t.id === created.id)
             ? p.filter((t) => t.id !== tempId)
             : p.map((t) => (t.id === tempId ? created : t))
-        )
-      )
+        );
+        if (created.assigned_to && created.assigned_to !== me.id) {
+          toast(`Assigned to ${displayName(created.assignee_name)}`);
+        }
+      })
       .catch((err) => {
         setTodos((p) => p.filter((t) => t.id !== tempId));
         setTitle((cur) => cur || text); // give the text back so nothing is lost
@@ -196,20 +224,21 @@ export default function Todos({ onLogout }) {
     }
   };
 
-  // ---------- PUT (edit title) ----------
-  const startEdit = (todo) => {
-    setEditingId(todo.id);
-    setEditText(todo.title);
-  };
-
-  const saveEdit = async (todo) => {
-    const text = editText.trim();
-    if (!text) return;
-    if (text === todo.title) return setEditingId(null);
+  // ---------- PUT (edit title / reassign) ----------
+  const saveEdit = async (todo, text, assigneeId) => {
+    const changes = {};
+    if (text !== todo.title) changes.title = text;
+    if (isAdmin && assigneeId !== (todo.assigned_to ?? null)) changes.assigned_to = assigneeId;
+    if (!Object.keys(changes).length) return setEditingId(null);
     try {
-      replaceTodo(await api.updateTodo(todo.id, { title: text }));
+      const updated = await api.updateTodo(todo.id, changes);
+      replaceTodo(updated);
       setEditingId(null);
-      toast("Task updated");
+      toast(
+        "assigned_to" in changes && updated.assignee_name
+          ? `Assigned to ${displayName(updated.assignee_name)}`
+          : "Task updated"
+      );
     } catch (err) {
       fail(err);
     }
@@ -233,7 +262,7 @@ export default function Todos({ onLogout }) {
       message: "This can't be undone.",
       action: async () => {
         const res = await api.deleteMany(ids);
-        removeLocal(ids);
+        removeLocal(res.deleted);
         done?.();
         toast(`${plural(res.count, "task")} deleted`);
       },
@@ -251,6 +280,16 @@ export default function Todos({ onLogout }) {
     }
   };
   const closeConfirm = useCallback(() => setConfirm(null), []);
+  const closeTeam = useCallback(() => setTeamOpen(false), []);
+
+  const onUsersChange = (next, { removed } = {}) => {
+    setUsers(next);
+    if (removed) {
+      if (assignTo === String(removed)) setAssignTo(String(me.id));
+      if (person === String(removed)) setPerson("everyone");
+      loadTodos().catch(fail); // their tasks are now unassigned
+    }
+  };
 
   // ---------- selection ----------
   const enterSelect = () => {
@@ -269,22 +308,29 @@ export default function Todos({ onLogout }) {
     });
 
   // ---------- derived ----------
-  const total = todos.length;
-  const doneCount = todos.filter((t) => t.completed).length;
+  const byPerson = useMemo(() => {
+    if (!isAdmin || person === "everyone") return todos;
+    if (person === "none") return todos.filter((t) => !t.assigned_to);
+    return todos.filter((t) => String(t.assigned_to) === person);
+  }, [todos, person, isAdmin]);
+
+  const total = byPerson.length;
+  const doneCount = byPerson.filter((t) => t.completed).length;
   const activeCount = total - doneCount;
   const pct = total ? Math.round((doneCount / total) * 100) : 0;
   const counts = { all: total, active: activeCount, done: doneCount };
+  const deletableDone = byPerson.filter((t) => t.completed && canManage(t) && !t.pending);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return todos.filter((t) => {
+    return byPerson.filter((t) => {
       if (filter === "active" && t.completed) return false;
       if (filter === "done" && !t.completed) return false;
       return !q || t.title.toLowerCase().includes(q);
     });
-  }, [todos, filter, query]);
+  }, [byPerson, filter, query]);
 
-  const selectable = visible.filter((t) => !t.pending);
+  const selectable = visible.filter((t) => !t.pending && canManage(t));
   const allVisibleSelected = selectable.length > 0 && selectable.every((t) => selected.has(t.id));
   const toggleSelectAll = () =>
     setSelected((prev) => {
@@ -294,20 +340,35 @@ export default function Todos({ onLogout }) {
     });
 
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const personName =
+    isAdmin && person !== "everyone" && person !== "none"
+      ? displayName(users.find((u) => String(u.id) === person)?.username || "")
+      : null;
   const heroSub =
     total === 0
-      ? "Let's plan your day."
+      ? isAdmin
+        ? "Add a task and assign it to your team."
+        : "No tasks yet. Enjoy your day!"
       : activeCount === 0
       ? "Everything's done. Great work!"
+      : personName
+      ? `${personName} has ${plural(activeCount, "task")} left.`
+      : isAdmin
+      ? `Your team has ${plural(activeCount, "open task")}.`
       : `You have ${plural(activeCount, "task")} left today.`;
 
   let empty = null;
   if (!loading && visible.length === 0) {
     if (query.trim()) empty = { title: "No matching tasks", text: `Nothing found for “${query.trim()}”.` };
     else if (filter === "done") empty = { title: "No completed tasks yet", text: "Tick a task to mark it as done." };
-    else if (filter === "active" && total) empty = { title: "All caught up!", text: "You've finished every task." };
-    else empty = { title: "No tasks yet", text: "Add your first task above to get started." };
+    else if (filter === "active" && total) empty = { title: "All caught up!", text: "Every task here is finished." };
+    else if (isAdmin) empty = { title: "No tasks yet", text: "Add a task above and pick who it's for." };
+    else empty = { title: "No tasks yet", text: "When a task is assigned to you, it will show up here." };
   }
+
+  const notifyText = isAdmin
+    ? "Get a phone notification when someone finishes a task you gave them."
+    : "Get a phone notification — even on the lock screen — when a task is assigned to you.";
 
   // ---------- render ----------
   return (
@@ -319,6 +380,11 @@ export default function Todos({ onLogout }) {
             <span>TaskFlow</span>
           </div>
           <div className="topbar-actions">
+            {isAdmin && (
+              <button className="icon-btn bell" onClick={() => setTeamOpen(true)} aria-label="Team" title="Team">
+                <UsersIcon size={20} />
+              </button>
+            )}
             {push !== "unsupported" && push !== "loading" && (
               <button
                 className={`icon-btn bell ${push === "on" ? "on" : ""}`}
@@ -349,15 +415,16 @@ export default function Todos({ onLogout }) {
         <section className="hero">
           <div className="hero-text">
             <p className="hero-date">{today}</p>
-            <h1>{greeting()}</h1>
+            <h1>
+              {greeting()}, {displayName(me.username)}
+            </h1>
             <p className="hero-sub">{heroSub}</p>
+            <span className="hero-role">
+              {isAdmin ? <ShieldIcon size={14} /> : <Avatar name={me.username} size={16} />}
+              {isAdmin ? "Admin" : "Employee"}
+            </span>
           </div>
-          <div
-            className="ring"
-            style={{ "--pct": pct }}
-            role="img"
-            aria-label={`${pct}% of tasks completed`}
-          >
+          <div className="ring" style={{ "--pct": pct }} role="img" aria-label={`${pct}% of tasks completed`}>
             <div className="ring-inner">
               <strong>{pct}%</strong>
               <small>done</small>
@@ -371,11 +438,11 @@ export default function Todos({ onLogout }) {
               <BellIcon size={20} />
             </div>
             <div className="notify-text">
-              <strong>Get notified about new tasks</strong>
+              <strong>Turn on notifications</strong>
               <span>
                 {push === "ios-install"
                   ? "On iPhone: add TaskFlow to your Home Screen, open it from there, then tap Turn on."
-                  : "Get a phone notification whenever someone adds a task."}
+                  : notifyText}
               </span>
             </div>
             <div className="notify-actions">
@@ -391,19 +458,54 @@ export default function Todos({ onLogout }) {
           </div>
         )}
 
-        <form className="add-bar" onSubmit={addTodo}>
-          <PlusIcon className="add-icon" />
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Add a new task…"
-            maxLength={200}
-            aria-label="New task"
-          />
-          <button type="submit" className="btn btn-primary" disabled={!title.trim()}>
-            Add
-          </button>
+        <form className={`add-bar ${isAdmin ? "with-assign" : ""}`} onSubmit={addTodo}>
+          <div className="add-row">
+            <PlusIcon className="add-icon" />
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={isAdmin ? "Add a task for your team…" : "Add a personal task…"}
+              maxLength={200}
+              aria-label="New task"
+            />
+            <button type="submit" className="btn btn-primary" disabled={!title.trim()}>
+              Add
+            </button>
+          </div>
+          {isAdmin && (
+            <label className="assign-row">
+              <span>Assign to</span>
+              <select className="select" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.id === me.id ? "Me" : displayName(u.username)}
+                  </option>
+                ))}
+                <option value="">Nobody</option>
+              </select>
+            </label>
+          )}
         </form>
+
+        {isAdmin && users.length > 1 && (
+          <div className="people" role="tablist" aria-label="Filter by person">
+            {[
+              { key: "everyone", label: "Everyone" },
+              ...users.map((u) => ({ key: String(u.id), label: u.id === me.id ? "Me" : displayName(u.username), name: u.username })),
+            ].map((p) => (
+              <button
+                key={p.key}
+                role="tab"
+                aria-selected={person === p.key}
+                className={`person ${person === p.key ? "active" : ""}`}
+                onClick={() => setPerson(p.key)}
+              >
+                {p.name ? <Avatar name={p.name} size={20} /> : <UsersIcon size={16} />}
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="toolbar">
           <div className="tabs" role="tablist" aria-label="Filter tasks">
@@ -448,16 +550,16 @@ export default function Todos({ onLogout }) {
             </>
           ) : (
             <>
-              <button className="link-btn" onClick={enterSelect} disabled={!total}>
+              <button className="link-btn" onClick={enterSelect} disabled={!selectable.length}>
                 <ListCheckIcon size={18} /> Select
               </button>
-              {doneCount > 0 && (
+              {deletableDone.length > 0 && (
                 <button
                   className="link-btn danger"
                   onClick={() =>
                     askDeleteMany(
-                      todos.filter((t) => t.completed).map((t) => t.id),
-                      { title: `Clear ${plural(doneCount, "completed task")}?` }
+                      deletableDone.map((t) => t.id),
+                      { title: `Clear ${plural(deletableDone.length, "completed task")}?` }
                     )
                   }
                 >
@@ -491,15 +593,16 @@ export default function Todos({ onLogout }) {
               <TodoItem
                 key={todo.id}
                 todo={todo}
+                me={me}
+                users={users}
+                canManage={canManage(todo)}
                 selectMode={selectMode}
                 selected={selected.has(todo.id)}
-                onSelect={() => !todo.pending && toggleSelect(todo.id)}
+                onSelect={() => !todo.pending && canManage(todo) && toggleSelect(todo.id)}
                 onToggle={() => toggle(todo)}
                 editing={editingId === todo.id}
-                editText={editText}
-                onEditText={setEditText}
-                onStartEdit={() => startEdit(todo)}
-                onSave={() => saveEdit(todo)}
+                onStartEdit={() => setEditingId(todo.id)}
+                onSave={(text, assigneeId) => saveEdit(todo, text, assigneeId)}
                 onCancel={() => setEditingId(null)}
                 onDelete={() => askDelete(todo)}
               />
@@ -536,6 +639,18 @@ export default function Todos({ onLogout }) {
         onConfirm={handleConfirm}
         onCancel={closeConfirm}
       />
+
+      {isAdmin && (
+        <TeamDialog
+          open={teamOpen}
+          me={me}
+          users={users}
+          onClose={closeTeam}
+          onUsersChange={onUsersChange}
+          onError={fail}
+          toast={toast}
+        />
+      )}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (

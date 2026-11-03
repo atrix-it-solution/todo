@@ -22,6 +22,10 @@ self.addEventListener("push", (event) => {
         body: data.body || "",
         icon: "/icons/taskflow-192.png",
         badge: "/icons/taskflow-badge-96.png",
+        tag: data.tag, // one notification per task (updates replace, not stack)
+        renotify: Boolean(data.tag), // still buzz the phone when replaced
+        vibrate: [200, 100, 200],
+        timestamp: Date.now(),
         data: { url: data.url || "/" },
       });
     })()

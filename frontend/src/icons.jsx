@@ -84,6 +84,18 @@ export const BellOffIcon = (p) => (
     <path d="M8.7 3A6 6 0 0118 8a21.3 21.3 0 00.6 5M17 17H3s3-2 3-9a4.67 4.67 0 01.3-1.7M10.3 21a1.94 1.94 0 003.4 0M2 2l20 20" />
   </Svg>
 );
+export const UsersIcon = (p) => (
+  <Svg {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0113 0M16 4.6a3.5 3.5 0 010 6.8M18.5 14.2A6.5 6.5 0 0121.5 20" />
+  </Svg>
+);
+export const UserPlusIcon = (p) => (
+  <Svg {...p}><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0113 0M19 8v6M16 11h6" /></Svg>
+);
+export const ShieldIcon = (p) => (
+  <Svg {...p}><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z" /></Svg>
+);
 export const SparkleIcon = (p) => (
   <Svg {...p}><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z" /></Svg>
 );
