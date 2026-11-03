@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "./db.js";
+import { notifyAll } from "./push.js";
 
 const router = Router();
 
@@ -43,6 +44,12 @@ router.post("/", async (req, res, next) => {
       [title]
     );
     res.status(201).json(rows[0]);
+
+    // Notify other devices in the background (doesn't slow down the response)
+    notifyAll(
+      { title: "New task added", body: rows[0].title, url: "/" },
+      { exceptEndpoint: req.get("X-Push-Endpoint") }
+    ).catch((err) => console.error("Notify failed:", err.message));
   } catch (err) {
     next(err);
   }

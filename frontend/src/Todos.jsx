@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import TodoItem from "./TodoItem.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
+import { getPushState, enablePush, disablePush, syncPush } from "./push.js";
 import {
+  BellIcon,
+  BellOffIcon,
   Logo,
   PlusIcon,
   SearchIcon,
@@ -41,12 +44,21 @@ export default function Todos({ onLogout }) {
   const [confirm, setConfirm] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [push, setPush] = useState("loading"); // on | off | denied | ios-install | unsupported
+  const [pushBusy, setPushBusy] = useState(false);
+  const [bannerHidden, setBannerHidden] = useState(() => {
+    try {
+      return localStorage.getItem("push_banner_hidden") === "1";
+    } catch {
+      return false;
+    }
+  });
 
   // ---------- helpers ----------
   const toast = useCallback((text, type = "success") => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, text, type }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2800);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), text.length > 50 ? 5000 : 2800);
   }, []);
 
   const fail = (err) => {
@@ -72,6 +84,78 @@ export default function Todos({ onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Refresh when a notification arrives or the app comes back to the screen
+  useEffect(() => {
+    const refresh = () =>
+      api
+        .getTodos()
+        .then((data) => setTodos((prev) => [...prev.filter((t) => t.pending), ...data]))
+        .catch((err) => err?.status === 401 && onLogout());
+    const onMessage = (e) => e.data?.type === "todos-changed" && refresh();
+    const onVisible = () => document.visibilityState === "visible" && refresh();
+
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      navigator.serviceWorker?.removeEventListener("message", onMessage);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------- notifications ----------
+  useEffect(() => {
+    getPushState()
+      .then((state) => {
+        setPush(state);
+        if (state === "on") syncPush();
+      })
+      .catch(() => setPush("unsupported"));
+  }, []);
+
+  const hideBanner = () => {
+    setBannerHidden(true);
+    try {
+      localStorage.setItem("push_banner_hidden", "1");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const togglePush = async () => {
+    if (pushBusy) return;
+    if (push === "ios-install") {
+      return toast("On iPhone, open TaskFlow from your Home Screen first, then tap the bell.", "error");
+    }
+    if (push === "denied") {
+      return toast("Notifications are blocked. Allow them for TaskFlow in your phone settings.", "error");
+    }
+    setPushBusy(true);
+    try {
+      if (push === "on") {
+        await disablePush();
+        setPush("off");
+        toast("Notifications turned off");
+      } else {
+        await enablePush();
+        setPush("on");
+        hideBanner();
+        toast("Notifications turned on");
+      }
+    } catch (err) {
+      if (err?.code === "denied") setPush("denied");
+      fail(err);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    // This device stops getting notifications after a manual log out
+    if (push === "on") await disablePush().catch(() => {});
+    onLogout();
+  };
+
   // ---------- POST (optimistic: shows instantly, input clears right away) ----------
   const addTodo = (e) => {
     e.preventDefault();
@@ -85,7 +169,14 @@ export default function Todos({ onLogout }) {
 
     api
       .createTodo(text)
-      .then((created) => setTodos((p) => p.map((t) => (t.id === tempId ? created : t))))
+      .then((created) =>
+        setTodos((p) =>
+          // a background refresh may already have brought this task in
+          p.some((t) => t.id === created.id)
+            ? p.filter((t) => t.id !== tempId)
+            : p.map((t) => (t.id === tempId ? created : t))
+        )
+      )
       .catch((err) => {
         setTodos((p) => p.filter((t) => t.id !== tempId));
         setTitle((cur) => cur || text); // give the text back so nothing is lost
@@ -227,10 +318,30 @@ export default function Todos({ onLogout }) {
             <Logo size={32} />
             <span>TaskFlow</span>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={onLogout} title="Log out">
-            <LogOutIcon size={18} />
-            <span className="hide-xs">Log out</span>
-          </button>
+          <div className="topbar-actions">
+            {push !== "unsupported" && push !== "loading" && (
+              <button
+                className={`icon-btn bell ${push === "on" ? "on" : ""}`}
+                onClick={togglePush}
+                disabled={pushBusy}
+                aria-pressed={push === "on"}
+                aria-label={push === "on" ? "Turn off notifications" : "Turn on notifications"}
+                title={push === "on" ? "Notifications on" : "Notifications off"}
+              >
+                {pushBusy ? (
+                  <span className="spinner dark" />
+                ) : push === "on" ? (
+                  <BellIcon size={20} />
+                ) : (
+                  <BellOffIcon size={20} />
+                )}
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={logout} title="Log out">
+              <LogOutIcon size={18} />
+              <span className="hide-xs">Log out</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -253,6 +364,32 @@ export default function Todos({ onLogout }) {
             </div>
           </div>
         </section>
+
+        {!bannerHidden && (push === "off" || push === "ios-install") && (
+          <div className="notify-card">
+            <div className="notify-icon">
+              <BellIcon size={20} />
+            </div>
+            <div className="notify-text">
+              <strong>Get notified about new tasks</strong>
+              <span>
+                {push === "ios-install"
+                  ? "On iPhone: add TaskFlow to your Home Screen, open it from there, then tap Turn on."
+                  : "Get a phone notification whenever someone adds a task."}
+              </span>
+            </div>
+            <div className="notify-actions">
+              {push === "off" && (
+                <button className="btn btn-primary btn-sm" onClick={togglePush} disabled={pushBusy}>
+                  Turn on
+                </button>
+              )}
+              <button className="icon-btn sm" onClick={hideBanner} aria-label="Dismiss">
+                <XIcon size={16} />
+              </button>
+            </div>
+          </div>
+        )}
 
         <form className="add-bar" onSubmit={addTodo}>
           <PlusIcon className="add-icon" />

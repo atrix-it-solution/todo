@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { initDb } from "./db.js";
 import authRouter, { requireAuth } from "./auth.js";
 import todosRouter from "./todos.js";
+import pushRouter from "./push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -20,12 +21,22 @@ app.use(express.json());
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.use("/api/auth", authRouter);
 app.use("/api/todos", requireAuth, todosRouter);
+app.use("/api/push", requireAuth, pushRouter);
 app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
 
 // Serve the built React frontend from the same Node URL
 const distDir = path.resolve(__dirname, "../../frontend/dist");
 if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
+  app.use(
+    express.static(distDir, {
+      // Always re-check these so phones pick up updates quickly
+      setHeaders: (res, filePath) => {
+        if (/(sw\.js|manifest\.webmanifest|index\.html)$/.test(filePath)) {
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      },
+    })
+  );
   app.get("*", (_req, res) => res.sendFile(path.join(distDir, "index.html")));
 } else {
   app.get("/", (_req, res) =>

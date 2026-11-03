@@ -76,6 +76,14 @@ export const AlertIcon = (p) => (
 export const ListCheckIcon = (p) => (
   <Svg {...p}><rect x="3" y="4" width="6" height="6" rx="1.5" /><path d="M4.5 7l1 1 2-2M13 7h8M13 17h8" /><rect x="3" y="14" width="6" height="6" rx="1.5" /></Svg>
 );
+export const BellIcon = (p) => (
+  <Svg {...p}><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 003.4 0" /></Svg>
+);
+export const BellOffIcon = (p) => (
+  <Svg {...p}>
+    <path d="M8.7 3A6 6 0 0118 8a21.3 21.3 0 00.6 5M17 17H3s3-2 3-9a4.67 4.67 0 01.3-1.7M10.3 21a1.94 1.94 0 003.4 0M2 2l20 20" />
+  </Svg>
+);
 export const SparkleIcon = (p) => (
   <Svg {...p}><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z" /></Svg>
 );

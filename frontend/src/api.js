@@ -6,10 +6,22 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
+// This device's push endpoint, so the server doesn't notify the device that made the change
+export const PUSH_ENDPOINT_KEY = "todo_push_endpoint";
+const getPushEndpoint = () => {
+  try {
+    return localStorage.getItem(PUSH_ENDPOINT_KEY);
+  } catch {
+    return null;
+  }
+};
+
 async function request(path, { method = "GET", body } = {}) {
   const headers = { "Content-Type": "application/json" };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const endpoint = getPushEndpoint();
+  if (endpoint) headers["X-Push-Endpoint"] = endpoint;
 
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -34,4 +46,8 @@ export const api = {
   updateTodo: (id, changes) => request(`/todos/${id}`, { method: "PUT", body: changes }),
   deleteTodo: (id) => request(`/todos/${id}`, { method: "DELETE" }),
   deleteMany: (ids) => request("/todos", { method: "DELETE", body: { ids } }),
+
+  pushPublicKey: () => request("/push/public-key"),
+  pushSubscribe: (subscription) => request("/push/subscribe", { method: "POST", body: { subscription } }),
+  pushUnsubscribe: (endpoint) => request("/push/unsubscribe", { method: "POST", body: { endpoint } }),
 };
