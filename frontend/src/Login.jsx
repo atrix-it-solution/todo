@@ -25,7 +25,7 @@ export default function Login({ onLogin }) {
   return (
     <div className="center">
       <form className="card login" onSubmit={submit}>
-        <h1>Sign in</h1>
+        <h1>Sign insss</h1>
         <label>
           Username
           <input
